@@ -1,0 +1,21 @@
+{
+  "team": "NguyenThiYen",
+  "phase": "private",
+  "headline": 97.15,
+  "sub": {
+    "correct": 0.67,
+    "quality": 0.7926,
+    "error": 1.0,
+    "latency": 0.7825,
+    "cost": 0.9621,
+    "drift": 0.3501,
+    "prompt": 0.8222
+  },
+  "diag_f1": 0.924,
+  "n": 80,
+  "n_correct": 50,
+  "judge_mode": "offline",
+  "weights_hash": "e81a8ed58d93",
+  "key_hash": "7e3905b75db0",
+  "sig": "b11281f685f963208972e59d2f89f31bbdcd2e92c9adb28481beaae82460257b"
+}
