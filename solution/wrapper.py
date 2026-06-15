@@ -10,6 +10,7 @@ from telemetry.redact import redact
 
 
 _NOTE_MARKER = re.compile(r"(?im)^\s*(?:ghi\s*chu|note|system|instruction)\s*[:\-].*$")
+_CONTACT_SUFFIX = re.compile(r"\s*\(\s*lien he\s*:\s*\[REDACTED(?::[A-Z_]+)?\]\s*\)", re.I)
 
 
 def _sanitize(question):
@@ -50,6 +51,52 @@ def _log(result, context, wall_ms, attempts, cache_hit, sanitized):
     })
 
 
+def _grounded_answer(result):
+    """Build the final answer from tool observations, never from model arithmetic."""
+    stock = discount = shipping = None
+    for step in result.get("trace") or []:
+        observation = step.get("observation") or {}
+        if step.get("tool") == "check_stock":
+            stock = observation
+        elif step.get("tool") == "get_discount":
+            discount = observation
+        elif step.get("tool") == "calc_shipping":
+            shipping = observation
+
+    if stock:
+        if not stock.get("found", False):
+            return "Khong tim thay san pham; khong the dat hang."
+        if not stock.get("in_stock", False):
+            return "San pham hien het hang; khong the dat hang."
+    if shipping and (shipping.get("error") or shipping.get("cost_vnd") is None):
+        return "Dia diem giao hang khong duoc ho tro; khong the dat hang."
+
+    answer = result.get("answer") or ""
+    if stock and shipping and stock.get("unit_price_vnd") is not None:
+        quantity = _quantity_from_trace(result, stock)
+        available = stock.get("quantity")
+        if quantity and isinstance(available, int) and quantity > available:
+            return "So luong yeu cau vuot qua ton kho; khong the dat hang."
+        if quantity:
+            percent = discount.get("percent", 0) if discount and discount.get("valid") else 0
+            total = stock["unit_price_vnd"] * quantity * (100 - percent) // 100
+            total += shipping["cost_vnd"]
+            return f"Tong cong: {total} VND"
+    return _CONTACT_SUFFIX.sub("", answer).strip()
+
+
+def _quantity_from_trace(result, stock):
+    weight = stock.get("weight_kg")
+    for step in result.get("trace") or []:
+        if step.get("tool") == "calc_shipping" and weight:
+            total_weight = (step.get("observation") or {}).get("weight_kg")
+            if isinstance(total_weight, (int, float)):
+                quantity = round(total_weight / weight)
+                if quantity > 0 and abs(quantity * weight - total_weight) < 0.001:
+                    return quantity
+    return None
+
+
 def mitigate(call_next, question, config, context):
     set_correlation_id("req-" + str(context.get("qid", "unknown")))
     clean_question = _sanitize(question)
@@ -82,6 +129,7 @@ def mitigate(call_next, question, config, context):
             break
         time.sleep(0.15 * attempts)
 
+    result["answer"] = _grounded_answer(result)
     answer = result.get("answer")
     if isinstance(answer, str):
         result["answer"] = redact(answer)[0]
