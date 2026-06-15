@@ -1,12 +1,66 @@
 {
-  "team": "TODO-team-name",
+  "team": "NguyenThiYen",
   "schema_version": 1,
   "findings": [
     {
-      "fault_class": "latency_spike",
-      "evidence": {"metric": "latency_p95_ms", "observed": "TODO from your telemetry", "trace_ids": []},
-      "root_cause": "TODO: what config knob or behavior causes it?",
-      "suggested_fix": "TODO: config change and/or wrapper mitigation"
+      "fault_class": "error_spike",
+      "evidence": {"metric": "configured_tool_error_rate", "observed": 0.18, "trace_ids": []},
+      "root_cause": "Intermittent tool failures are explicitly enabled and retries are disabled.",
+      "suggested_fix": "Set tool_error_rate to 0 and enable bounded retry."
+    },
+    {
+      "fault_class": "infinite_loop",
+      "evidence": {"metric": "configured_loop_guard", "observed": false, "trace_ids": []},
+      "root_cause": "Loop protection is disabled while max_steps and tool calls are effectively unbounded.",
+      "suggested_fix": "Enable loop_guard and cap max_steps and tool_budget."
+    },
+    {
+      "fault_class": "cost_blowup",
+      "evidence": {"metric": "configured_cost_controls", "observed": "premium tier, verbose prompt, 2000 completion tokens", "trace_ids": []},
+      "root_cause": "Premium routing, verbose system context, and excessive token limits inflate cost.",
+      "suggested_fix": "Use standard tier, compact context, non-verbose system prompt, and lower completion limit."
+    },
+    {
+      "fault_class": "quality_drift",
+      "evidence": {"metric": "configured_session_drift_rate", "observed": 0.06, "trace_ids": []},
+      "root_cause": "Session drift is deliberately enabled with no periodic context reset.",
+      "suggested_fix": "Set drift rate to zero and reset context periodically."
+    },
+    {
+      "fault_class": "tool_failure",
+      "evidence": {"metric": "configured_tool_data_faults", "observed": "unicode normalization disabled and catalog override present", "trace_ids": []},
+      "root_cause": "Unicode inputs are not normalized and catalog data is overridden.",
+      "suggested_fix": "Enable Unicode normalization and clear catalog_override."
+    },
+    {
+      "fault_class": "pii_leak",
+      "evidence": {"metric": "configured_redact_pii", "observed": false, "trace_ids": []},
+      "root_cause": "Output PII redaction is disabled.",
+      "suggested_fix": "Enable redact_pii and redact again at the wrapper boundary."
+    },
+    {
+      "fault_class": "prompt_injection",
+      "evidence": {"metric": "initial_prompt_injection_defense", "observed": "absent", "trace_ids": []},
+      "root_cause": "The initial prompt does not distinguish untrusted order notes from instructions.",
+      "suggested_fix": "Add explicit injection defense and sanitize instruction-bearing note lines."
+    },
+    {
+      "fault_class": "fabrication",
+      "evidence": {"metric": "initial_prompt_grounding_rule", "observed": "absent", "trace_ids": []},
+      "root_cause": "The initial prompt asks for a total without requiring tool grounding or refusal for unavailable products.",
+      "suggested_fix": "Require tool grounding and prohibit totals for unavailable or unknown products."
+    },
+    {
+      "fault_class": "arithmetic_error",
+      "evidence": {"metric": "configured_temperature", "observed": 1.6, "trace_ids": []},
+      "root_cause": "High temperature and no arithmetic verification make totals inconsistent.",
+      "suggested_fix": "Lower temperature and require exact floor arithmetic plus verification."
+    },
+    {
+      "fault_class": "tool_overuse",
+      "evidence": {"metric": "configured_tool_budget", "observed": 0, "trace_ids": []},
+      "root_cause": "No tool-call budget or prompt economy rule is configured.",
+      "suggested_fix": "Set a bounded tool budget and require each necessary tool at most once."
     }
   ]
 }

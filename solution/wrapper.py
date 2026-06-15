@@ -1,33 +1,95 @@
-"""YOUR mitigation + observability layer. The simulator calls mitigate() around the
-opaque agent (a REAL LLM) for every request. This is the ONLY place observability can
-live -- the agent is silent. Legal moves: retry / cache / route / guardrail / sanitize
-/ fallback / session-reset / PROMPT ROUTING, plus your own logging/tracing/metrics.
-Illegal: hardcoding answers, importing the agent internals, reading instructor files,
-network exfiltration.
-
-  call_next(question, config) -> result   # the only way to reach the black box
-  context = {"session_id","turn_index","qid","cache": <shared dict>, "cache_lock": <Lock>}
-  result  = {"answer","status","steps","trace","meta":{latency_ms,usage,...}}
-
-PROMPT ROUTING: you can override the agent's system prompt PER REQUEST by setting it in
-the config you pass to call_next, e.g.:
-    conf = dict(config); conf["system_prompt"] = my_better_prompt
-    result = call_next(question, conf)
-(Or just edit solution/prompt.txt for a single static prompt used on every request.)
-"""
+"""Mitigation and observability boundary for the opaque agent."""
 from __future__ import annotations
 
-# You may reuse the Day 13 toolkit, e.g.:
-# from telemetry.logger import logger
-# from telemetry.cost import cost_from_usage
-# from telemetry.redact import redact
+import re
+import time
+
+from telemetry.cost import cost_from_usage
+from telemetry.logger import logger, set_correlation_id
+from telemetry.redact import redact
+
+
+_NOTE_MARKER = re.compile(r"(?im)^\s*(?:ghi\s*chu|note|system|instruction)\s*[:\-].*$")
+
+
+def _sanitize(question):
+    """Remove obvious instruction-bearing note lines while retaining order fields."""
+    return _NOTE_MARKER.sub("[untrusted note removed]", question)
+
+
+def _cache_key(question, config):
+    return (
+        question.casefold().strip(),
+        config.get("provider"),
+        config.get("model"),
+    )
+
+
+def _log(result, context, wall_ms, attempts, cache_hit, sanitized):
+    meta = result.get("meta") or {}
+    usage = meta.get("usage") or {}
+    answer = result.get("answer") or ""
+    _, pii_count = redact(answer)
+    trace = result.get("trace") or []
+    logger.log_event("AGENT_CALL", {
+        "qid": context.get("qid"),
+        "session_id": context.get("session_id"),
+        "turn_index": context.get("turn_index"),
+        "status": result.get("status"),
+        "steps": result.get("steps"),
+        "wall_ms": wall_ms,
+        "latency_ms": meta.get("latency_ms"),
+        "usage": usage,
+        "cost_usd": cost_from_usage(meta.get("model", ""), usage),
+        "tools_used": meta.get("tools_used", []),
+        "trace": trace,
+        "attempts": attempts,
+        "cache_hit": cache_hit,
+        "input_sanitized": sanitized,
+        "pii_found_in_raw_answer": pii_count,
+    })
 
 
 def mitigate(call_next, question, config, context):
-    # TODO: add observability here (log latency, tokens, cost, errors, PII, tool counts).
-    # TODO: add mitigations (retry on error, cache repeats, route cheap, reset drifting
-    #       sessions, validate arithmetic, sanitize order notes, redact PII...).
-    # TODO: optionally route a better system prompt:
-    #       conf = dict(config); conf["system_prompt"] = "..."; return call_next(question, conf)
-    result = call_next(question, config)        # <-- passthrough stub: replace me
+    set_correlation_id("req-" + str(context.get("qid", "unknown")))
+    clean_question = _sanitize(question)
+    conf = dict(config)
+    conf.update({
+        "temperature": 0.1,
+        "loop_guard": True,
+        "normalize_unicode": True,
+        "redact_pii": True,
+        "tool_budget": 4,
+        "max_steps": 7,
+    })
+
+    cache = context.get("cache")
+    lock = context.get("cache_lock")
+    key = _cache_key(clean_question, conf)
+    if cache is not None and lock is not None:
+        with lock:
+            cached = cache.get(key)
+        if cached is not None:
+            _log(cached, context, 0, 0, True, clean_question != question)
+            return cached
+
+    started = time.time()
+    attempts = 0
+    result = {}
+    for attempts in range(1, 3):
+        result = call_next(clean_question, conf)
+        if result.get("status") == "ok":
+            break
+        time.sleep(0.15 * attempts)
+
+    answer = result.get("answer")
+    if isinstance(answer, str):
+        result["answer"] = redact(answer)[0]
+
+    if result.get("status") == "ok" and cache is not None and lock is not None:
+        with lock:
+            cache[key] = result
+
+    wall_ms = int((time.time() - started) * 1000)
+    _log(result, context, wall_ms, attempts, False, clean_question != question)
     return result
